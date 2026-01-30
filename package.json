@@ -1,0 +1,57 @@
+{
+  "name": "@openclaw/cliq",
+  "version": "0.1.0",
+  "description": "Zoho Cliq channel plugin for OpenClaw - real-time team chat integration",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "openclaw",
+    "zoho",
+    "cliq",
+    "channel",
+    "chat",
+    "plugin",
+    "ai-assistant"
+  ],
+  "author": "IBIZ Digital, Inc.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ibizdigital/openclaw-cliq-channel.git"
+  },
+  "openclaw": {
+    "extensions": ["./dist/index.js"],
+    "channel": {
+      "id": "cliq",
+      "label": "Zoho Cliq",
+      "selectionLabel": "Zoho Cliq (Team Chat)",
+      "docsPath": "/channels/cliq",
+      "docsLabel": "cliq",
+      "blurb": "Real-time team chat via Zoho Cliq bots with @mention support.",
+      "order": 70,
+      "aliases": ["zoho-cliq", "zohocliq"]
+    },
+    "install": {
+      "npmSpec": "@openclaw/cliq",
+      "localPath": "extensions/cliq",
+      "defaultChoice": "npm"
+    }
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.0"
+  }
+}

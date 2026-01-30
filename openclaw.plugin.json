@@ -1,0 +1,55 @@
+{
+  "id": "cliq",
+  "name": "@openclaw/cliq",
+  "version": "0.1.0",
+  "description": "Zoho Cliq channel plugin for OpenClaw",
+  "author": "IBIZ Digital, Inc.",
+  "license": "MIT",
+  "entry": "./dist/index.js",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "orgId": { "type": "string", "description": "Zoho organization ID" },
+      "accessToken": { "type": "string", "description": "OAuth access token" },
+      "refreshToken": { "type": "string", "description": "OAuth refresh token" },
+      "clientId": { "type": "string", "description": "Zoho API client ID" },
+      "clientSecret": { "type": "string", "description": "Zoho API client secret" },
+      "botId": { "type": "string", "description": "Bot unique name from Cliq" },
+      "botName": { "type": "string", "default": "Henry", "description": "Bot display name" },
+      "webhookSecret": { "type": "string", "description": "Webhook validation secret" },
+      "dm": {
+        "type": "object",
+        "properties": {
+          "policy": { "type": "string", "enum": ["open", "pairing", "allowlist"], "default": "open" },
+          "allowFrom": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "accounts": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "orgId": { "type": "string" },
+            "accessToken": { "type": "string" },
+            "refreshToken": { "type": "string" },
+            "clientId": { "type": "string" },
+            "clientSecret": { "type": "string" },
+            "botId": { "type": "string" },
+            "botName": { "type": "string" }
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "accessToken": { "label": "Access Token", "sensitive": true },
+    "refreshToken": { "label": "Refresh Token", "sensitive": true },
+    "clientSecret": { "label": "Client Secret", "sensitive": true },
+    "webhookSecret": { "label": "Webhook Secret", "sensitive": true },
+    "orgId": { "label": "Organization ID", "placeholder": "843608858" },
+    "clientId": { "label": "Client ID", "placeholder": "1000.XXXX..." },
+    "botId": { "label": "Bot ID", "placeholder": "henry" },
+    "botName": { "label": "Bot Name", "placeholder": "Henry" }
+  }
+}
