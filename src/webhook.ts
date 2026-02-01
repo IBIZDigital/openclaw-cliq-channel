@@ -32,6 +32,7 @@ interface CliqWebhookPayload {
   channel?: {
     id: string;
     name: string;
+    unique_name?: string; // API uses this for posting
   };
 
   // Thread context
@@ -55,24 +56,30 @@ interface CliqWebhookPayload {
   handler?: "message" | "mention" | "welcome" | "context" | "participationHandler";
 }
 
+function getCliqConfig(cfg: any): any {
+  // Check both channels.cliq and plugins.entries.cliq.config
+  return cfg.channels?.cliq ?? cfg.plugins?.entries?.cliq?.config ?? {};
+}
+
 function resolveAccount(cfg: any, accountId?: string): CliqAccount {
-  const accounts = cfg.channels?.cliq?.accounts ?? {};
+  const cliqCfg = getCliqConfig(cfg);
+  const accounts = cliqCfg.accounts ?? {};
   const id = accountId ?? "default";
   const account = accounts[id] ?? {};
 
   return {
     accountId: id,
     enabled: account.enabled ?? true,
-    orgId: account.orgId ?? cfg.channels?.cliq?.orgId,
-    accessToken: account.accessToken ?? cfg.channels?.cliq?.accessToken,
-    refreshToken: account.refreshToken ?? cfg.channels?.cliq?.refreshToken,
-    clientId: account.clientId ?? cfg.channels?.cliq?.clientId,
-    clientSecret: account.clientSecret ?? cfg.channels?.cliq?.clientSecret,
-    botId: account.botId ?? cfg.channels?.cliq?.botId,
-    botName: account.botName ?? cfg.channels?.cliq?.botName ?? "Henry",
-    webhookSecret: account.webhookSecret ?? cfg.channels?.cliq?.webhookSecret,
-    dm: account.dm ?? cfg.channels?.cliq?.dm ?? { policy: "open" },
-    channels: account.channels ?? cfg.channels?.cliq?.channels ?? {},
+    orgId: account.orgId ?? cliqCfg.orgId,
+    accessToken: account.accessToken ?? cliqCfg.accessToken,
+    refreshToken: account.refreshToken ?? cliqCfg.refreshToken,
+    clientId: account.clientId ?? cliqCfg.clientId,
+    clientSecret: account.clientSecret ?? cliqCfg.clientSecret,
+    botId: account.botId ?? cliqCfg.botId,
+    botName: account.botName ?? cliqCfg.botName ?? "Henry",
+    webhookSecret: account.webhookSecret ?? cliqCfg.webhookSecret,
+    dm: account.dm ?? cliqCfg.dm ?? { policy: "open" },
+    channels: account.channels ?? cliqCfg.channels ?? {},
   };
 }
 
@@ -97,6 +104,8 @@ function parseCliqPayload(payload: CliqWebhookPayload): CliqMessage | null {
     timestamp: payload.time || new Date().toISOString(),
     channelId: payload.channel?.id,
     channelName: payload.channel?.name,
+    // Cliq API uses unique_name for posting to channels
+    channelUniqueName: payload.channel?.unique_name || payload.channel?.name,
     isChannel,
     isMention,
     threadId: payload.thread?.id,
@@ -126,9 +135,21 @@ export function createCliqWebhookHandler(api: PluginApi, cfg: any) {
       const payload: CliqWebhookPayload =
         typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-      api.logger.debug("[cliq] Received webhook:", JSON.stringify(payload, null, 2));
+      api.logger.info("[cliq] Received webhook payload:", JSON.stringify(payload, null, 2));
 
       const message = parseCliqPayload(payload);
+      
+      if (message) {
+        api.logger.info("[cliq] Parsed message:", {
+          isChannel: message.isChannel,
+          isMention: message.isMention,
+          channelId: message.channelId,
+          channelName: message.channelName,
+          channelUniqueName: message.channelUniqueName,
+          chatId: message.chatId,
+          senderId: message.senderId,
+        });
+      }
       if (!message) {
         api.logger.debug("[cliq] Could not parse message from payload");
         res.status(200).json({ status: "ignored" });
@@ -149,8 +170,9 @@ export function createCliqWebhookHandler(api: PluginApi, cfg: any) {
       }
 
       // Build the target for responses
+      // Use channelUniqueName for API calls (Cliq requires unique_name, not id)
       const target = message.isChannel
-        ? `channel:${message.channelId}`
+        ? `channel:${message.channelUniqueName}`
         : `user:${message.senderId}`;
 
       // Route to OpenClaw agent
@@ -166,6 +188,7 @@ export function createCliqWebhookHandler(api: PluginApi, cfg: any) {
         metadata: {
           channelId: message.channelId,
           channelName: message.channelName,
+          channelUniqueName: message.channelUniqueName,
           isChannel: message.isChannel,
           isMention: message.isMention,
         },

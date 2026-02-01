@@ -13,8 +13,13 @@ interface TokenResponse {
   error?: string;
 }
 
+function getCliqConfig(cfg: any): any {
+  // Check both channels.cliq and plugins.entries.cliq.config
+  return cfg.channels?.cliq ?? cfg.plugins?.entries?.cliq?.config ?? {};
+}
+
 export async function refreshCliqToken(cfg: any, api: PluginApi): Promise<string> {
-  const cliqConfig = cfg.channels?.cliq ?? {};
+  const cliqConfig = getCliqConfig(cfg);
 
   const refreshToken = cliqConfig.refreshToken;
   const clientId = cliqConfig.clientId;
@@ -44,7 +49,7 @@ export async function refreshCliqToken(cfg: any, api: PluginApi): Promise<string
     throw new Error(`Token refresh failed: ${response.status} - ${error}`);
   }
 
-  const data: TokenResponse = await response.json();
+  const data = (await response.json()) as TokenResponse;
 
   if (data.error) {
     throw new Error(`Token refresh error: ${data.error}`);
@@ -129,7 +134,7 @@ export async function exchangeCodeForTokens(options: {
     throw new Error(`Token exchange failed: ${response.status} - ${error}`);
   }
 
-  const data: TokenResponse & { refresh_token?: string } = await response.json();
+  const data = (await response.json()) as TokenResponse & { refresh_token?: string };
 
   if (data.error) {
     throw new Error(`Token exchange error: ${data.error}`);

@@ -1,50 +1,40 @@
 /**
- * Zoho Cliq Channel Configuration
+ * Cliq Configuration Types
  */
 
-import { z } from "zod";
+export interface CliqDmConfig {
+  policy?: "open" | "pairing" | "allowlist" | "disabled";
+  allowFrom?: string[];
+  enabled?: boolean;
+}
 
-export const CliqAccountSchema = z.object({
-  enabled: z.boolean().default(true),
-  orgId: z.string().optional(),
-  accessToken: z.string().optional(),
-  refreshToken: z.string().optional(),
-  clientId: z.string().optional(),
-  clientSecret: z.string().optional(),
-  botId: z.string().optional(),
-  botName: z.string().default("Henry"),
-  webhookSecret: z.string().optional(),
-  dm: z
-    .object({
-      policy: z.enum(["open", "pairing", "allowlist"]).default("open"),
-      allowFrom: z.array(z.string()).default([]),
-    })
-    .optional(),
-  channels: z.record(z.string(), z.any()).optional(),
-});
+export interface CliqGroupConfig {
+  enabled?: boolean;
+  requireMention?: boolean;
+  allowFrom?: string[];
+  systemPrompt?: string;
+}
 
-export const CliqConfigSchema = z.object({
-  // Top-level config (used as defaults)
-  orgId: z.string().optional(),
-  accessToken: z.string().optional(),
-  refreshToken: z.string().optional(),
-  clientId: z.string().optional(),
-  clientSecret: z.string().optional(),
-  botId: z.string().optional(),
-  botName: z.string().default("Henry"),
-  webhookSecret: z.string().optional(),
-  dm: z
-    .object({
-      policy: z.enum(["open", "pairing", "allowlist"]).default("open"),
-      allowFrom: z.array(z.string()).default([]),
-    })
-    .optional(),
-  channels: z.record(z.string(), z.any()).optional(),
-  // Multi-account support
-  accounts: z.record(z.string(), CliqAccountSchema).optional(),
-});
-
-export type CliqConfig = z.infer<typeof CliqConfigSchema>;
+export interface CliqConfig {
+  enabled?: boolean;
+  orgId?: string;
+  accessToken?: string;
+  refreshToken?: string;
+  clientId?: string;
+  clientSecret?: string;
+  botId?: string;
+  botName?: string;
+  webhookSecret?: string;
+  dm?: CliqDmConfig;
+  channels?: Record<string, CliqGroupConfig>;
+  groups?: Record<string, CliqGroupConfig>;
+  accounts?: Record<string, Partial<CliqAccount>>;
+  requireMention?: boolean;
+  textChunkLimit?: number;
+  allowBots?: boolean;
+  groupPolicy?: "open" | "allowlist" | "disabled";
+  groupAllowFrom?: string[];
+}
 
 export interface CliqAccount {
   accountId: string;
@@ -55,25 +45,87 @@ export interface CliqAccount {
   clientId?: string;
   clientSecret?: string;
   botId?: string;
-  botName: string;
+  botName?: string;
   webhookSecret?: string;
-  dm?: {
-    policy: "open" | "pairing" | "allowlist";
-    allowFrom: string[];
-  };
-  channels?: Record<string, any>;
+  dm?: CliqDmConfig;
+  channels?: Record<string, CliqGroupConfig>;
+  groups?: Record<string, CliqGroupConfig>;
+  requireMention?: boolean;
+  textChunkLimit?: number;
+  allowBots?: boolean;
+  groupPolicy?: "open" | "allowlist" | "disabled";
+  groupAllowFrom?: string[];
 }
 
 export interface CliqMessage {
   chatId: string;
   senderId: string;
   senderName: string;
+  senderEmail?: string;
   text: string;
   messageId: string;
   timestamp: string;
   channelId?: string;
   channelName?: string;
+  channelUniqueName?: string;
   isChannel: boolean;
   isMention: boolean;
   threadId?: string;
 }
+
+export const CliqConfigSchema = {
+  type: "object",
+  properties: {
+    enabled: { type: "boolean" },
+    orgId: { type: "string", description: "Zoho organization ID" },
+    accessToken: { type: "string", description: "OAuth access token" },
+    refreshToken: { type: "string", description: "OAuth refresh token" },
+    clientId: { type: "string", description: "Zoho API client ID" },
+    clientSecret: { type: "string", description: "Zoho API client secret" },
+    botId: { type: "string", description: "Bot unique name from Cliq" },
+    botName: { type: "string", default: "Henry", description: "Bot display name" },
+    webhookSecret: { type: "string", description: "Webhook validation secret" },
+    requireMention: { type: "boolean", default: true, description: "Require @mention in channels" },
+    textChunkLimit: { type: "number", default: 4000, description: "Max text chunk size" },
+    dm: {
+      type: "object",
+      properties: {
+        policy: {
+          type: "string",
+          enum: ["open", "pairing", "allowlist", "disabled"],
+          default: "open",
+        },
+        allowFrom: { type: "array", items: { type: "string" } },
+        enabled: { type: "boolean" },
+      },
+    },
+    groups: {
+      type: "object",
+      additionalProperties: {
+        type: "object",
+        properties: {
+          enabled: { type: "boolean" },
+          requireMention: { type: "boolean" },
+          allowFrom: { type: "array", items: { type: "string" } },
+          systemPrompt: { type: "string" },
+        },
+      },
+    },
+    accounts: {
+      type: "object",
+      additionalProperties: {
+        type: "object",
+        properties: {
+          enabled: { type: "boolean", default: true },
+          orgId: { type: "string" },
+          accessToken: { type: "string" },
+          refreshToken: { type: "string" },
+          clientId: { type: "string" },
+          clientSecret: { type: "string" },
+          botId: { type: "string" },
+          botName: { type: "string" },
+        },
+      },
+    },
+  },
+} as const;
