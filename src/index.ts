@@ -13,7 +13,7 @@ import type {
   ChannelMeta,
 } from "openclaw/plugin-sdk";
 import { CliqConfigSchema, type CliqConfig, type CliqAccount } from "./config.js";
-import { sendCliqChannelMessage, sendCliqUserMessage } from "./outbound.js";
+import { sendCliqChannelMessage, sendCliqUserMessage, sendCliqChatMessage } from "./outbound.js";
 import { startCliqWebhookMonitor, setCliqRuntime, handleCliqWebhookRequest } from "./monitor.js";
 import { refreshCliqToken } from "./auth.js";
 
@@ -252,11 +252,26 @@ export const cliqPlugin: ChannelPlugin = {
         throw new Error("Cliq access token is not configured");
       }
 
-      const normalized = normalizeCliqTarget(to) ?? to;
+      // Don't normalize chat: targets - they need to stay as-is
+      const normalized = to?.startsWith("chat:") ? to : (normalizeCliqTarget(to) ?? to);
       console.log(`[cliq] sendText to=${normalized}, text length=${text?.length}`);
 
       try {
-        if (normalized.startsWith("channel:")) {
+        if (normalized.startsWith("chat:")) {
+          // Universal chat ID - works for both channels and DMs
+          const chatId = normalized.slice("chat:".length);
+          await sendCliqChatMessage({
+            chatId,
+            text,
+            accessToken: account.accessToken,
+            threadId: threadId ?? replyToId,
+          });
+          return {
+            channel: "cliq",
+            messageId: `cliq-${Date.now()}`,
+            chatId,
+          };
+        } else if (normalized.startsWith("channel:")) {
           const channelName = normalized.slice("channel:".length);
           await sendCliqChannelMessage({
             channelId: channelName,
