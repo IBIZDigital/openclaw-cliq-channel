@@ -55,6 +55,8 @@ export interface CliqAccount {
   allowBots?: boolean;
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom?: string[];
+  /** Conversation timeout in seconds. After @mention, Henry responds to follow-ups for this duration. Default: 300 (5 min) */
+  conversationTimeout?: number;
 }
 
 export interface CliqMessage {

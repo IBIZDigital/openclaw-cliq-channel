@@ -8,6 +8,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CliqAccount, CliqMessage } from "./config.js";
 import { sendCliqChannelMessage, sendCliqUserMessage, sendCliqChatMessage } from "./outbound.js";
+import { getConversationTracker, generateFollowUpHint } from "./conversation-tracker.js";
 
 // Runtime reference set by the plugin
 let cliqRuntime: any = null;
@@ -488,12 +489,50 @@ async function processCliqWebhook(payload: CliqWebhookPayload, target: WebhookTa
   const isGroup = message.isChannel;
   const rawBody = message.text;
 
-  // Handle group messages - check mention requirement
+  // Get conversation tracker with configured timeout
+  const conversationTimeoutMs = (account as any).conversationTimeout 
+    ? (account as any).conversationTimeout * 1000 
+    : 5 * 60 * 1000; // Default 5 minutes
+  const tracker = getConversationTracker({ timeoutMs: conversationTimeoutMs });
+
+  // Check for per-channel settings
+  const channelConfig = isGroup && message.channelUniqueName
+    ? (account.channels?.[message.channelUniqueName] || account.channels?.[message.chatId])
+    : null;
+  const channelRequireMention = channelConfig?.requireMention;
+
+  // Determine if mention is required for this context
+  const requireMention = channelRequireMention ?? account.requireMention ?? true;
+
+  // Track if this is a follow-up to an active conversation
+  let isFollowUp = false;
+  let followUpHint = "";
+  let existingSessionKey: string | undefined;
+
+  // Handle group messages - check mention requirement OR active conversation
   if (isGroup) {
-    const requireMention = account.requireMention ?? true;
-    if (requireMention && !message.isMention) {
-      console.log("[cliq] Group message without mention, skipping");
-      return;
+    if (message.isMention) {
+      // Explicit @mention - always respond
+      console.log("[cliq] Message has @mention, will respond");
+    } else if (!requireMention) {
+      // Channel doesn't require mentions (e.g., dedicated bot channel)
+      console.log("[cliq] Channel doesn't require @mention, will respond");
+    } else {
+      // Check for active conversation (intelligent follow-up)
+      const activeConversation = tracker.getActiveConversation({
+        channelId: message.chatId || message.channelUniqueName || "",
+        userId: message.senderId,
+      });
+
+      if (activeConversation) {
+        isFollowUp = true;
+        existingSessionKey = activeConversation.sessionKey;
+        followUpHint = generateFollowUpHint(activeConversation);
+        console.log("[cliq] Active conversation found, treating as potential follow-up");
+      } else {
+        console.log("[cliq] Group message without mention and no active conversation, skipping");
+        return;
+      }
     }
   }
 
@@ -552,23 +591,40 @@ async function processCliqWebhook(payload: CliqWebhookPayload, target: WebhookTa
     sessionKey: route.sessionKey,
   });
 
+  // Add follow-up hint if this is a potential follow-up message
+  const messageBody = isFollowUp && followUpHint
+    ? `${rawBody}\n\n${followUpHint}`
+    : rawBody;
+
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "Cliq",
     from: fromLabel,
     timestamp: message.timestamp ? Date.parse(message.timestamp) : undefined,
     previousTimestamp,
     envelope: envelopeOptions,
-    body: rawBody,
+    body: messageBody,
   });
+
+  // Use existing session if this is a follow-up, otherwise use the routed session
+  const effectiveSessionKey = existingSessionKey || route.sessionKey;
+
+  // Record mention if this is an @mention (starts/continues active conversation)
+  if (message.isMention && isGroup) {
+    tracker.recordMention({
+      channelId: message.chatId || message.channelUniqueName || "",
+      userId: message.senderId,
+      sessionKey: effectiveSessionKey,
+    });
+  }
 
   // Build the context payload for the agent
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
-    RawBody: rawBody,
+    RawBody: messageBody,
     CommandBody: rawBody,
     From: `cliq:${message.senderId}`,
     To: `cliq:${responseTarget}`,
-    SessionKey: route.sessionKey,
+    SessionKey: effectiveSessionKey,
     AccountId: route.accountId,
     ChatType: isGroup ? "channel" : "direct",
     ConversationLabel: fromLabel,
@@ -599,9 +655,10 @@ async function processCliqWebhook(payload: CliqWebhookPayload, target: WebhookTa
     });
 
   console.log("[cliq] Dispatching to agent:", {
-    sessionKey: route.sessionKey,
+    sessionKey: effectiveSessionKey,
     agentId: route.agentId,
     target: responseTarget,
+    isFollowUp,
   });
 
   // Dispatch using the buffered block dispatcher (same as Google Chat)
@@ -617,6 +674,9 @@ async function processCliqWebhook(payload: CliqWebhookPayload, target: WebhookTa
           runtime,
           statusSink,
           threadId: message.threadId,
+          // Pass context for conversation tracking
+          channelId: message.chatId || message.channelUniqueName || "",
+          userId: message.senderId,
         });
       },
       onError: (err: Error, info: { kind: string }) => {
@@ -633,8 +693,10 @@ async function deliverCliqReply(params: {
   runtime: CliqMonitorOptions["runtime"];
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
   threadId?: string;
+  channelId?: string;
+  userId?: string;
 }): Promise<void> {
-  const { payload, account, target, runtime, statusSink, threadId } = params;
+  const { payload, account, target, runtime, statusSink, threadId, channelId, userId } = params;
 
   // Get fresh token from config (in case it was refreshed)
   const core = getCliqRuntime();
@@ -694,6 +756,12 @@ async function deliverCliqReply(params: {
 
     statusSink?.({ lastOutboundAt: Date.now() });
     console.log("[cliq] Reply delivered successfully");
+
+    // Record that we responded (keeps conversation active)
+    if (channelId && userId) {
+      const tracker = getConversationTracker();
+      tracker.recordResponse({ channelId, userId });
+    }
   } catch (err) {
     runtime.error?.(`[cliq] Reply delivery failed: ${String(err)}`);
     throw err;
