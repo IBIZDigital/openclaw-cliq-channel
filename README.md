@@ -153,6 +153,109 @@ openclaw gateway stop && openclaw gateway start
 | `dm.policy` | string | "open" | DM policy: "open", "pairing", "allowlist", "disabled" |
 | `dm.allowFrom` | array | [] | Allowed sender IDs (for allowlist policy) |
 | `requireMention` | boolean | true | Require @mention in channels |
+| `conversationTimeout` | number | 300 | Seconds to keep conversation active after @mention |
+
+## Intelligent Conversation Mode
+
+Henry can respond to follow-up messages without requiring @mention on every message. This works by:
+
+1. **Cliq tracks active conversations** - When Henry is @mentioned, Cliq remembers for 5 minutes
+2. **Follow-ups are forwarded** - Messages in that window get sent to OpenClaw
+3. **Henry decides** - The agent determines if the message is relevant
+
+### Cliq Bot Setup (Deluge)
+
+**Mention Handler** - Records when Henry was @mentioned:
+```deluge
+response = Map();
+
+// Record that Henry was mentioned in this chat (5-minute window)
+chat_key = "henry_active_" + chat.get("id");
+zoho.cliq.datastore.set(chat_key, zoho.currenttime.toLong().toString());
+
+// Forward to OpenClaw
+webhook_url = "https://your-domain.com/webhooks/cliq";
+payload = Map();
+payload.put("message", message);
+payload.put("user", user);
+payload.put("chat", chat);
+payload.put("mentions", mentions);
+payload.put("handler", "mention");
+
+invokeurl
+[
+  url: webhook_url
+  type: POST
+  parameters: payload.toString()
+  headers: {"Content-Type": "application/json"}
+];
+
+return response;
+```
+
+**Message Handler** - Only forwards if conversation is active:
+```deluge
+response = Map();
+
+// Check if Henry was recently mentioned in this chat
+chat_key = "henry_active_" + chat.get("id");
+last_mention = zoho.cliq.datastore.get(chat_key);
+
+if(last_mention != null)
+{
+  last_time = last_mention.toLong();
+  current_time = zoho.currenttime.toLong();
+  elapsed_minutes = (current_time - last_time) / 60000;
+  
+  // Only forward if within 5 minutes of last mention
+  if(elapsed_minutes < 5)
+  {
+    webhook_url = "https://your-domain.com/webhooks/cliq";
+    payload = Map();
+    payload.put("message", message);
+    payload.put("user", user);
+    payload.put("chat", chat);
+    payload.put("handler", "message");
+    
+    invokeurl
+    [
+      url: webhook_url
+      type: POST
+      parameters: payload.toString()
+      headers: {"Content-Type": "application/json"}
+    ];
+  }
+}
+
+return response;
+```
+
+**Benefits:**
+- 💰 Saves tokens - only relevant messages reach OpenClaw
+- 🧠 Natural conversations - no @mention spam needed
+- ⏱️ Auto-expires - conversations end after 5 minutes of inactivity
+
+### Per-Channel Settings
+
+Create a dedicated bot channel where @mention is never required:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "cliq": {
+        "config": {
+          "channels": {
+            "ask_henry": {
+              "requireMention": false
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
 
 ## Token Refresh
 
