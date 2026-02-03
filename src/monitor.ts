@@ -9,6 +9,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CliqAccount, CliqMessage } from "./config.js";
 import { sendCliqChannelMessage, sendCliqUserMessage, sendCliqChatMessage, postBotMessage, sendBotDmMessage } from "./outbound.js";
 import { getConversationTracker, generateFollowUpHint } from "./conversation-tracker.js";
+import { initTokenManager, getTokenManager } from "./token-manager.js";
 
 // Runtime reference set by the plugin
 let cliqRuntime: any = null;
@@ -718,6 +719,8 @@ async function processCliqWebhook(payload: CliqWebhookPayload, target: WebhookTa
           channelId: message.chatId || message.channelUniqueName || "",
           channelUniqueName: message.channelUniqueName || "",
           userId: message.senderId,
+          // Pass message ID for reply_to threading
+          replyToMessageId: message.messageId,
         });
       },
       onError: (err: Error, info: { kind: string }) => {
@@ -737,14 +740,23 @@ async function deliverCliqReply(params: {
   channelId?: string;
   channelUniqueName?: string;
   userId?: string;
+  replyToMessageId?: string;  // Original message ID for threading
 }): Promise<void> {
-  const { payload, account, target, runtime, statusSink, threadId, channelId, channelUniqueName, userId } = params;
+  const { payload, account, target, runtime, statusSink, threadId, channelId, channelUniqueName, userId, replyToMessageId } = params;
 
-  // Get fresh token from config (in case it was refreshed)
+  // Get fresh token - prefer token manager (auto-refresh) over config
   const core = getCliqRuntime();
   const freshCfg = core?.config?.get?.() ?? core?.cfg;
   const cliqCfg = freshCfg?.channels?.cliq ?? freshCfg?.plugins?.entries?.cliq?.config ?? {};
-  const accessToken = cliqCfg.accessToken || account.accessToken;
+  
+  const tokenManager = getTokenManager();
+  let accessToken: string;
+  
+  if (tokenManager) {
+    accessToken = await tokenManager.getToken();
+  } else {
+    accessToken = cliqCfg.accessToken || account.accessToken;
+  }
 
   if (!accessToken) {
     runtime.error?.("[cliq] No access token for reply");
@@ -778,8 +790,8 @@ async function deliverCliqReply(params: {
       const isLikelyChannel = channelId && !chatId.includes("-B");
       
       if (isLikelyChannel && botId && channelUniqueName) {
-        // Post as bot to channel using unique_name
-        console.log(`[cliq] Posting as bot ${botName || botId} to channel ${channelUniqueName} (org: ${orgId})`);
+        // Post as bot to channel using unique_name, with reply_to for threading
+        console.log(`[cliq] Posting as bot ${botName || botId} to channel ${channelUniqueName} (org: ${orgId})${replyToMessageId ? ` replying to ${replyToMessageId}` : ''}`);
         await postBotMessage({
           channelId: channelUniqueName,
           text,
@@ -787,6 +799,7 @@ async function deliverCliqReply(params: {
           botId,
           botName,
           orgId,
+          replyTo: replyToMessageId,
         });
       } else {
         // DM - send as bot to user
@@ -813,7 +826,7 @@ async function deliverCliqReply(params: {
     } else if (target.startsWith("channel:")) {
       const channelName = target.slice("channel:".length);
       if (botId) {
-        // Post as bot
+        // Post as bot with reply_to for threading
         await postBotMessage({
           channelId: channelName,
           text,
@@ -821,6 +834,7 @@ async function deliverCliqReply(params: {
           botId,
           botName,
           orgId,
+          replyTo: replyToMessageId,
         });
       } else {
         await sendCliqChannelMessage({
@@ -847,6 +861,7 @@ async function deliverCliqReply(params: {
           botId,
           botName,
           orgId,
+          replyTo: replyToMessageId,
         });
       } else {
         await sendCliqChannelMessage({
@@ -877,6 +892,25 @@ export async function startCliqWebhookMonitor(options: CliqMonitorOptions): Prom
   const webhookPath = "/webhooks/cliq";
 
   console.log(`[cliq] Starting webhook monitor for account ${account.accountId}`);
+
+  // Initialize token manager for auto-refresh on 401
+  const cliqCfg = config as any;
+  if (cliqCfg.refreshToken && cliqCfg.clientId && cliqCfg.clientSecret) {
+    initTokenManager({
+      accessToken: cliqCfg.accessToken || account.accessToken,
+      refreshToken: cliqCfg.refreshToken,
+      clientId: cliqCfg.clientId,
+      clientSecret: cliqCfg.clientSecret,
+      configUpdater: (newToken) => {
+        // Update in-memory config
+        cliqCfg.accessToken = newToken;
+        console.log("[cliq] Token updated in memory via auto-refresh");
+      },
+    });
+    console.log("[cliq] Token manager initialized with auto-refresh");
+  } else {
+    console.warn("[cliq] Missing refresh credentials - auto-refresh disabled");
+  }
 
   // Register webhook target
   const unregisterTarget = registerCliqWebhookTarget({

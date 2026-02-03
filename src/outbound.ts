@@ -204,7 +204,8 @@ export async function sendBotDmMessage(options: SendBotDmOptions): Promise<void>
 }
 
 /**
- * Post a message via bot to a channel (alternative method)
+ * Post a message via bot to a channel
+ * Supports reply_to for threading
  */
 export async function postBotMessage(options: {
   channelId: string;
@@ -213,12 +214,13 @@ export async function postBotMessage(options: {
   botId: string;
   botName?: string;
   orgId?: string;
+  replyTo?: string;  // Message ID to reply to (creates thread)
 }): Promise<void> {
-  const { channelId, text, accessToken, botId, orgId } = options;
+  const { channelId, text, accessToken, botId, orgId, replyTo } = options;
   // Post to channel endpoint with bot_unique_name query param to post AS the bot
   const url = `${CLIQ_API_BASE}/channelsbyname/${encodeURIComponent(channelId)}/message?bot_unique_name=${encodeURIComponent(botId)}`;
 
-  console.log(`[cliq-outbound] Posting as bot ${botId} to channel: ${channelId}`);
+  console.log(`[cliq-outbound] Posting as bot ${botId} to channel: ${channelId}${replyTo ? ` (replying to ${replyTo})` : ''}`);
 
   const headers: Record<string, string> = {
     Authorization: `Zoho-oauthtoken ${accessToken}`,
@@ -229,10 +231,16 @@ export async function postBotMessage(options: {
     headers["orgId"] = orgId;
   }
 
+  // Build body with optional reply_to for threading
+  const body: Record<string, string> = { text };
+  if (replyTo) {
+    body.reply_to = replyTo;
+  }
+
   const response = await fetch(url, {
     method: "POST",
     headers,
-    body: JSON.stringify({ text }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
