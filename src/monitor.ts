@@ -476,6 +476,7 @@ function parseCliqPayload(payload: CliqWebhookPayload): CliqMessage | null {
     senderEmail: user.email_id || user.email,
     text,
     messageId: messageId || `cliq-${Date.now()}`,
+    cliqMessageId: messageId || undefined,  // Raw Cliq message ID for reply_to (undefined if not provided)
     timestamp: messageTime || new Date().toISOString(),
     channelId,
     channelName,
@@ -604,7 +605,8 @@ async function processCliqWebhook(payload: CliqWebhookPayload, target: WebhookTa
     accountId: account.accountId,
     peer: {
       kind: isGroup ? "group" : "dm",
-      id: message.channelUniqueName || message.chatId,
+      // For groups, use channel name; for DMs, use "dm:{senderId}" to get a Cliq-specific session
+      id: isGroup ? message.channelUniqueName : `dm:${message.senderId}`,
     },
   });
 
@@ -719,8 +721,8 @@ async function processCliqWebhook(payload: CliqWebhookPayload, target: WebhookTa
           channelId: message.chatId || message.channelUniqueName || "",
           channelUniqueName: message.channelUniqueName || "",
           userId: message.senderId,
-          // Pass message ID for reply_to threading
-          replyToMessageId: message.messageId,
+          // Pass raw Cliq message ID for reply_to threading (only if provided by Deluge handler)
+          replyToMessageId: message.cliqMessageId,
         });
       },
       onError: (err: Error, info: { kind: string }) => {

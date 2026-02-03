@@ -66,6 +66,7 @@ export interface CliqMessage {
   senderEmail?: string;
   text: string;
   messageId: string;
+  cliqMessageId?: string;  // Raw Cliq message ID for reply_to threading
   timestamp: string;
   channelId?: string;
   channelName?: string;
