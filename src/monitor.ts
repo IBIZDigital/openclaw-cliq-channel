@@ -7,7 +7,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CliqAccount, CliqMessage } from "./config.js";
-import { sendCliqChannelMessage, sendCliqUserMessage, sendCliqChatMessage } from "./outbound.js";
+import { sendCliqChannelMessage, sendCliqUserMessage, sendCliqChatMessage, postBotMessage, sendBotDmMessage } from "./outbound.js";
 import { getConversationTracker, generateFollowUpHint } from "./conversation-tracker.js";
 
 // Runtime reference set by the plugin
@@ -36,8 +36,8 @@ export type CliqMonitorOptions = {
 };
 
 interface CliqWebhookPayload {
-  // Message content
-  message?: {
+  // Message content - can be string OR object depending on Zoho's mood
+  message?: string | {
     text?: string;
     id?: string;
     time?: string;
@@ -47,20 +47,27 @@ interface CliqWebhookPayload {
   // Sender info
   user?: {
     id: string;
-    name: string;
+    name?: string;
+    first_name?: string;
+    last_name?: string;
     email_id?: string;
     email?: string;
     zuid?: string;
+    zoho_user_id?: string;
   };
 
   // Chat context (for DMs and channels)
   chat?: {
     id: string;
     type?: string;
+    chat_type?: string;
     title?: string;
+    channel_unique_name?: string;
+    channel_id?: string;
+    owner?: string;
   };
 
-  // Channel context (for mentions)
+  // Channel context (for mentions - sometimes separate)
   channel?: {
     id: string;
     name: string;
@@ -384,58 +391,91 @@ async function handleCliqWebhookWithTargets(
 }
 
 function parseCliqPayload(payload: CliqWebhookPayload): CliqMessage | null {
-  const text = payload.message?.text || payload.text || "";
+  // Handle message as string OR object
+  let text = "";
+  let messageId = "";
+  let messageTime = "";
+  
+  if (typeof payload.message === "string") {
+    text = payload.message.trim();
+  } else if (payload.message && typeof payload.message === "object") {
+    text = payload.message.text?.trim() || "";
+    messageId = payload.message.id || "";
+    messageTime = payload.message.time || "";
+  }
+  
+  // Fallback to payload.text
+  if (!text && payload.text) {
+    text = payload.text.trim();
+  }
+
   const user = payload.user;
 
   if (!text || !user?.id) {
-    console.log("[cliq] Missing text or user id");
+    console.log("[cliq] Missing text or user id", { 
+      hasText: Boolean(text), 
+      textType: typeof payload.message,
+      hasUserId: Boolean(user?.id),
+      payloadKeys: Object.keys(payload),
+    });
     return null;
   }
 
+  // Build user name from available fields
+  const userName = user.name 
+    || [user.first_name, user.last_name].filter(Boolean).join(" ")
+    || user.id;
+
   // Zoho sends channel info in different ways:
   // 1. payload.channel (for some webhook types)
-  // 2. payload.chat with type="channel" (for message handlers)
+  // 2. payload.chat with type="channel" or chat_type="channel" (for message handlers)
+  // 3. payload.chat.channel_unique_name (direct field)
   const hasChannelObject = Boolean(payload.channel?.id || payload.channel?.unique_name);
-  const isChatChannel = payload.chat?.type === "channel";
-  const isChannel = hasChannelObject || isChatChannel;
+  const isChatChannel = payload.chat?.type === "channel" || payload.chat?.chat_type === "channel";
+  const isChannel = hasChannelObject || isChatChannel || Boolean(payload.chat?.channel_unique_name);
 
   const handler = payload.handler || "";
   const isMention = handler.includes("mention") ||
     Boolean(payload.mentions?.some((m) => m.type === "bot")) ||
     isChannel; // Assume channel messages are mentions (bot was @mentioned to receive)
 
-  // Determine channel info - try multiple sources
-  let channelUniqueName = payload.channel?.unique_name || payload.channel?.name;
-  let channelId = payload.channel?.id;
+  // Determine channel info - try multiple sources (Zoho is inconsistent)
+  let channelUniqueName = payload.chat?.channel_unique_name 
+    || payload.channel?.unique_name 
+    || payload.channel?.name;
+  let channelId = payload.chat?.channel_id || payload.channel?.id;
   let channelName = payload.channel?.name;
   const chatId = payload.chat?.id || channelId || "";
 
   // If chat.type is "channel", extract channel name from chat.title
   // Format is typically "#Channel Name" or "Channel Name"
-  if (isChatChannel && !channelUniqueName && payload.chat?.title) {
+  if (isChatChannel && !channelName && payload.chat?.title) {
     channelName = payload.chat.title.replace(/^#\s*/, "").trim();
-    // Convert to unique_name format (lowercase, replace spaces with underscores)
-    // But we need the actual unique_name from config or API
-    // For now, use a normalized version
-    channelUniqueName = channelName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  }
+  
+  // Use channel_unique_name from chat if available
+  if (!channelUniqueName && payload.chat?.channel_unique_name) {
+    channelUniqueName = payload.chat.channel_unique_name;
   }
 
-  console.log("[cliq] Channel detection:", {
-    hasChannelObject,
-    isChatChannel,
+  console.log("[cliq] Parsed payload:", {
+    text: text.substring(0, 50),
+    userName,
     isChannel,
+    isMention,
     channelUniqueName,
-    chatTitle: payload.chat?.title,
+    chatId,
+    handler,
   });
 
   return {
     chatId,
     senderId: user.id,
-    senderName: user.name || "Unknown",
+    senderName: userName,
     senderEmail: user.email_id || user.email,
     text,
-    messageId: payload.message?.id || `cliq-${Date.now()}`,
-    timestamp: payload.message?.time || new Date().toISOString(),
+    messageId: messageId || `cliq-${Date.now()}`,
+    timestamp: messageTime || new Date().toISOString(),
     channelId,
     channelName,
     channelUniqueName,
@@ -676,6 +716,7 @@ async function processCliqWebhook(payload: CliqWebhookPayload, target: WebhookTa
           threadId: message.threadId,
           // Pass context for conversation tracking
           channelId: message.chatId || message.channelUniqueName || "",
+          channelUniqueName: message.channelUniqueName || "",
           userId: message.senderId,
         });
       },
@@ -694,9 +735,10 @@ async function deliverCliqReply(params: {
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
   threadId?: string;
   channelId?: string;
+  channelUniqueName?: string;
   userId?: string;
 }): Promise<void> {
-  const { payload, account, target, runtime, statusSink, threadId, channelId, userId } = params;
+  const { payload, account, target, runtime, statusSink, threadId, channelId, channelUniqueName, userId } = params;
 
   // Get fresh token from config (in case it was refreshed)
   const core = getCliqRuntime();
@@ -719,39 +761,101 @@ async function deliverCliqReply(params: {
 
   console.log(`[cliq] Delivering reply to ${target}, length=${text.length}`);
 
+  // Get botId and orgId for posting as bot
+  const botId = cliqCfg.botId || account.botId;
+  const botName = cliqCfg.botName || account.botName;
+  const orgId = cliqCfg.orgId || account.orgId;
+
   try {
     if (target.startsWith("chat:")) {
-      // Universal chat ID - works for both channels and DMs
+      // Universal chat ID - for channels, try to post as bot
+      // For DMs, use chat endpoint
       const chatId = target.slice("chat:".length);
-      await sendCliqChatMessage({
-        chatId,
-        text,
-        accessToken,
-        threadId: threadId ?? payload.replyToId,
-      });
+      
+      // Check if this looks like a channel chat ID (starts with CT_ and contains channel marker)
+      // Channel chat IDs typically look like: CT_xxxx_xxxx
+      // DM chat IDs look like: CT_xxxx_xxxx-B1 or similar with user suffix
+      const isLikelyChannel = channelId && !chatId.includes("-B");
+      
+      if (isLikelyChannel && botId && channelUniqueName) {
+        // Post as bot to channel using unique_name
+        console.log(`[cliq] Posting as bot ${botName || botId} to channel ${channelUniqueName} (org: ${orgId})`);
+        await postBotMessage({
+          channelId: channelUniqueName,
+          text,
+          accessToken,
+          botId,
+          botName,
+          orgId,
+        });
+      } else {
+        // DM - send as bot to user
+        if (botId && userId) {
+          console.log(`[cliq] Sending DM as bot ${botId} to user ${userId}`);
+          await sendBotDmMessage({
+            userId,
+            text,
+            accessToken,
+            botId,
+            orgId,
+          });
+        } else {
+          // Fallback to chat endpoint (sends as authenticated user)
+          console.log(`[cliq] Fallback: Sending to chat ${chatId} (no botId or userId)`);
+          await sendCliqChatMessage({
+            chatId,
+            text,
+            accessToken,
+            threadId: threadId ?? payload.replyToId,
+          });
+        }
+      }
     } else if (target.startsWith("channel:")) {
       const channelName = target.slice("channel:".length);
-      await sendCliqChannelMessage({
-        channelId: channelName,
-        text,
-        accessToken,
-        threadId: threadId ?? payload.replyToId,
-      });
+      if (botId) {
+        // Post as bot
+        await postBotMessage({
+          channelId: channelName,
+          text,
+          accessToken,
+          botId,
+          botName,
+          orgId,
+        });
+      } else {
+        await sendCliqChannelMessage({
+          channelId: channelName,
+          text,
+          accessToken,
+          threadId: threadId ?? payload.replyToId,
+        });
+      }
     } else if (target.startsWith("user:")) {
-      const userId = target.slice("user:".length);
+      const usrId = target.slice("user:".length);
       await sendCliqUserMessage({
-        userId,
+        userId: usrId,
         text,
         accessToken,
       });
     } else {
-      // Default to channel
-      await sendCliqChannelMessage({
-        channelId: target,
-        text,
-        accessToken,
-        threadId: threadId ?? payload.replyToId,
-      });
+      // Default to channel via bot
+      if (botId) {
+        await postBotMessage({
+          channelId: target,
+          text,
+          accessToken,
+          botId,
+          botName,
+          orgId,
+        });
+      } else {
+        await sendCliqChannelMessage({
+          channelId: target,
+          text,
+          accessToken,
+          threadId: threadId ?? payload.replyToId,
+        });
+      }
     }
 
     statusSink?.({ lastOutboundAt: Date.now() });

@@ -26,6 +26,14 @@ export interface SendUserMessageOptions {
   accessToken: string;
 }
 
+export interface SendBotDmOptions {
+  userId: string;
+  text: string;
+  accessToken: string;
+  botId: string;
+  orgId?: string;
+}
+
 /**
  * Send a message to a Cliq chat by chat ID (works for channels AND DMs)
  * This is the preferred method - use the chat ID from the incoming webhook
@@ -157,6 +165,45 @@ export async function sendCliqUserMessage(options: SendUserMessageOptions): Prom
 }
 
 /**
+ * Send a DM as the bot to a specific user
+ * Uses the bot's message endpoint with userids parameter
+ */
+export async function sendBotDmMessage(options: SendBotDmOptions): Promise<void> {
+  const { userId, text, accessToken, botId, orgId } = options;
+  const url = `${CLIQ_API_BASE}/bots/${encodeURIComponent(botId)}/message`;
+
+  console.log(`[cliq-outbound] Sending DM as bot ${botId} to user: ${userId}`);
+
+  const headers: Record<string, string> = {
+    Authorization: `Zoho-oauthtoken ${accessToken}`,
+    "Content-Type": "application/json",
+  };
+  
+  if (orgId) {
+    headers["orgId"] = orgId;
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ text, userids: userId }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    console.error(`[cliq-outbound] Bot DM failed: ${response.status} - ${error}`);
+    
+    if (response.status === 401) {
+      throw new Error(`Cliq API unauthorized (token may be expired): ${error}`);
+    }
+    
+    throw new Error(`Cliq Bot DM error: ${response.status} - ${error}`);
+  }
+
+  console.log(`[cliq-outbound] Bot DM sent successfully to user ${userId}`);
+}
+
+/**
  * Post a message via bot to a channel (alternative method)
  */
 export async function postBotMessage(options: {
@@ -164,22 +211,28 @@ export async function postBotMessage(options: {
   text: string;
   accessToken: string;
   botId: string;
+  botName?: string;
+  orgId?: string;
 }): Promise<void> {
-  const { channelId, text, accessToken, botId } = options;
-  const url = `${CLIQ_API_BASE}/bots/${encodeURIComponent(botId)}/message`;
+  const { channelId, text, accessToken, botId, orgId } = options;
+  // Post to channel endpoint with bot_unique_name query param to post AS the bot
+  const url = `${CLIQ_API_BASE}/channelsbyname/${encodeURIComponent(channelId)}/message?bot_unique_name=${encodeURIComponent(botId)}`;
 
-  console.log(`[cliq-outbound] Posting bot message to channel: ${channelId}`);
+  console.log(`[cliq-outbound] Posting as bot ${botId} to channel: ${channelId}`);
+
+  const headers: Record<string, string> = {
+    Authorization: `Zoho-oauthtoken ${accessToken}`,
+    "Content-Type": "application/json",
+  };
+  
+  if (orgId) {
+    headers["orgId"] = orgId;
+  }
 
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      Authorization: `Zoho-oauthtoken ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      text,
-      channel: { unique_name: channelId },
-    }),
+    headers,
+    body: JSON.stringify({ text }),
   });
 
   if (!response.ok) {
