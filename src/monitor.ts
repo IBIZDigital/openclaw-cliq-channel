@@ -10,6 +10,7 @@ import type { CliqAccount, CliqMessage } from "./config.js";
 import { sendCliqChannelMessage, sendCliqUserMessage, sendCliqChatMessage, postBotMessage, sendBotDmMessage } from "./outbound.js";
 import { getConversationTracker, generateFollowUpHint } from "./conversation-tracker.js";
 import { initTokenManager, getTokenManager } from "./token-manager.js";
+import { generateTimecardReport } from "./timecard.js";
 
 // Runtime reference set by the plugin
 let cliqRuntime: any = null;
@@ -503,6 +504,69 @@ function isSenderAllowed(senderId: string, senderEmail: string | undefined, allo
   });
 }
 
+/**
+ * Handle menu actions (e.g., timecard report)
+ */
+async function handleMenuAction(payload: any, target: WebhookTarget): Promise<void> {
+  const { account, config } = target;
+  const action = payload.action;
+  const userId = payload.user?.id;
+  const chatId = payload.chat?.id;
+  
+  // Get fresh token
+  const core = getCliqRuntime();
+  const freshCfg = core?.config?.get?.() ?? core?.cfg;
+  const cliqCfg = freshCfg?.channels?.cliq ?? freshCfg?.plugins?.entries?.cliq?.config ?? {};
+  const accessToken = cliqCfg.accessToken || account.accessToken;
+  const orgId = cliqCfg.orgId || account.orgId;
+  const botId = cliqCfg.botId || account.botId;
+  
+  console.log(`[cliq] Processing menu action: ${action}`);
+  
+  try {
+    if (action === "timecard_report") {
+      const channelId = payload.channel_id || "CT_2242282079588189025_846376335";
+      const channelName = payload.channel_name || "ibiz-company-wide";
+      
+      // Generate timecard report
+      const report = await generateTimecardReport({
+        accessToken,
+        orgId,
+        chatId: channelId,
+        channelName,
+        limit: 100,
+      });
+      
+      // Send report to user via DM
+      if (userId && botId) {
+        await sendBotDmMessage({
+          userId,
+          text: report,
+          accessToken,
+          botId,
+          orgId,
+        });
+        console.log("[cliq] Timecard report sent to user:", userId);
+      }
+    } else {
+      console.log("[cliq] Unknown menu action:", action);
+    }
+  } catch (err) {
+    console.error("[cliq] Menu action failed:", err);
+    
+    // Send error to user
+    if (userId && botId) {
+      await sendBotDmMessage({
+        userId,
+        text: `❌ Sorry, I couldn't generate the report: ${err instanceof Error ? err.message : "Unknown error"}`,
+        accessToken,
+        botId,
+        orgId,
+      });
+    }
+  }
+}
+
 async function processCliqWebhook(payload: CliqWebhookPayload, target: WebhookTarget): Promise<void> {
   const { account, config, runtime, statusSink } = target;
   const core = getCliqRuntime();
@@ -525,6 +589,13 @@ async function processCliqWebhook(payload: CliqWebhookPayload, target: WebhookTa
   if (message.senderName === account.botName ||
       message.senderId === account.botId) {
     console.log("[cliq] Skipping self-message");
+    return;
+  }
+
+  // Handle menu actions (e.g., timecard report)
+  if ((payload as any).handler === "menu" && (payload as any).action) {
+    console.log("[cliq] Menu action received:", (payload as any).action);
+    await handleMenuAction(payload as any, target);
     return;
   }
 
