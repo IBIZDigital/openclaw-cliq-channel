@@ -681,6 +681,16 @@ async function processCliqWebhook(payload: CliqWebhookPayload, target: WebhookTa
     },
   });
 
+  // Override session key to ensure Cliq messages stay in Cliq-specific sessions
+  // The core routing might default to main session - we want isolated Cliq sessions
+  const cliqSessionKey = isGroup
+    ? `agent:${route.agentId}:cliq:group:${message.channelUniqueName || message.chatId}`
+    : `agent:${route.agentId}:cliq:dm:${message.senderId}`;
+  
+  // Use our Cliq-specific session key instead of the default route
+  route.sessionKey = cliqSessionKey;
+  console.log(`[cliq] Using Cliq-specific session: ${cliqSessionKey}`);
+
   // Build response target - prefer chat ID for universal routing
   const responseTarget = message.chatId
     ? `chat:${message.chatId}`
